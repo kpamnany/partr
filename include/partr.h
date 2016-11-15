@@ -44,9 +44,10 @@ typedef void *partr_t;
 
 void partr_init();
 void partr_shutdown();
-partr_t partr_spawn(void *(*f)(void *), void *arg);
-void *partr_sync(partr_t l);
-partr_t partr_parfor(void *(*f)(void *), void *arg);
+bool partr_start(void (*f)(void *), void *arg);
+bool partr_spawn(partr_t *t, void *(*f)(void *), void *arg, bool detach);
+bool partr_sync(void **r, partr_t t, bool done_with_task);
+bool partr_parfor(partr_t *t, void *(*f)(void *), void *arg);
 
 
 #endif /* PARTR_H */

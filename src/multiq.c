@@ -132,12 +132,17 @@ ptask_t *multiq_deletemin()
         rn2 = cong(heap_p, cong_unbias, &rngseed);
         prio1 = __atomic_load_n(&heaps[rn1].prio, __ATOMIC_SEQ_CST);
         prio2 = __atomic_load_n(&heaps[rn2].prio, __ATOMIC_SEQ_CST);
-        if (prio1 > prio2)
+        if (prio1 > prio2) {
+            prio1 = prio2;
             rn1 = rn2;
+        }
         else if (prio1 == prio2 && prio1 == INT16_MAX)
             continue;
-        if (!__atomic_test_and_set(&heaps[rn1].lock, __ATOMIC_ACQUIRE))
-            break;
+        if (!__atomic_test_and_set(&heaps[rn1].lock, __ATOMIC_ACQUIRE)) {
+            if (prio1 == heaps[rn1].prio)
+                break;
+            __atomic_clear(&heaps[rn1].lock, __ATOMIC_RELEASE);
+        }
     }
     task = heaps[rn1].tasks[0];
     heaps[rn1].tasks[0] = heaps[rn1].tasks[--heaps[rn1].ntasks];

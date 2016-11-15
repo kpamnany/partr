@@ -34,11 +34,9 @@ void taskpools_init()
                     calloc(ctx_sizeof(), sizeof(uint8_t));
             ptaskpools[i].tasks[j].stack =
                     calloc(TASK_STACK_SIZE, sizeof(uint8_t));
-            ptaskpools[i].tasks[j].running_tid = TASK_READY;
+            ptaskpools[i].tasks[j].cq = ptaskpools[i].tasks[j].cq_next = NULL;
             __atomic_clear(&ptaskpools[i].tasks[j].cq_lock, __ATOMIC_RELAXED);
-            ptaskpools[i].tasks[j].cq_head = NULL;
-            ptaskpools[i].tasks[j].cq_tail = NULL;
-            ptaskpools[i].tasks[j].cq_next = NULL;
+            ptaskpools[i].tasks[j].detached = false;
             ptaskpools[i].tasks[j].pool = i;
             ptaskpools[i].tasks[j].index = j;
             ptaskpools[i].tasks[j].next_avail = j + 1;

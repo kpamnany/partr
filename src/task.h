@@ -10,30 +10,28 @@
 #include <concurrent/concurrent.h>
 #include <concurrent/shortname.h>
 
-#define TASK_READY      -1
 
-/* a task is essentially a coroutine */
 typedef struct ptask_tag {
-    struct      concurrent_ctx *ctx;
-    uint8_t     *stack;
+    /* coroutine context and stack */
+    struct concurrent_ctx *ctx;
+    uint8_t               *stack;
 
-    void        *(*f)(void *);
-    void        *arg, *ret;
-
-    /* which thread is running this task (-1 for none) */
-    int16_t     running_tid;
+    /* task entry point, argument, and result */
+    void *(*f)(void *);
+    void *arg, *ret;
 
     /* tasks to run on completion */
-    char                cq_lock;
-    struct ptask_tag    *cq_head, *cq_tail, *cq_next;
+    struct ptask_tag *cq, *cq_next;
+    char             cq_lock;
 
-    /* for the multiqueue */
-    int16_t prio;
+    /* clean up on completion */
+    bool detached;
 
     /* to manage task pools */
     int16_t pool, index, next_avail;
-    char used;
 
+    /* for the multiqueue */
+    int16_t prio;
 } ptask_t;
 
 
