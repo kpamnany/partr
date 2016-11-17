@@ -16,7 +16,7 @@
 #define MULTIQ_TASKS_PER_HEAP           129
 
 /* logging control (debug, info, warn, err, critical) */
-#define LOG_LEVEL_NAME                  "PARTR_LOG_LEVEL_NAME"
+#define LOG_LEVEL_NAME                  "PARTR_LOG_LEVEL"
 #define DEFAULT_LOG_LEVEL               "debug"
 
 /* controls for when threads sleep */
@@ -44,10 +44,10 @@ typedef void *partr_t;
 
 void partr_init();
 void partr_shutdown();
-bool partr_start(void (*f)(void *), void *arg);
-bool partr_spawn(partr_t *t, void *(*f)(void *), void *arg, bool detach);
-bool partr_sync(void **r, partr_t t, bool done_with_task);
-bool partr_parfor(partr_t *t, void *(*f)(void *), void *arg);
+int partr_start(void **ret, void *(*f)(void *), void *arg);
+int partr_spawn(partr_t *t, void *(*f)(void *), void *arg, int detach);
+int partr_sync(void **r, partr_t t, int done_with_task);
+int partr_parfor(partr_t *t, void *(*f)(void *), void *arg);
 
 
 #endif /* PARTR_H */

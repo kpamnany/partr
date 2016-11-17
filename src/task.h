@@ -25,7 +25,7 @@ typedef struct ptask_tag {
     char             cq_lock;
 
     /* clean up on completion */
-    bool detached;
+    char detached;
 
     /* to manage task pools */
     int16_t pool, index, next_avail;

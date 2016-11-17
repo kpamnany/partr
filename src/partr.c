@@ -37,6 +37,9 @@ __thread uint64_t rngseed;
 /* forward declare thread function */
 static void *partr_thread(void *arg_);
 
+/* internally used to indicate a yield occurred in the runtime itself */
+static const int64_t yield_from_sync = 1;
+
 /* thread barrier */
 static int volatile barcnt;
 static int volatile barsense = 1;
@@ -253,7 +256,112 @@ void partr_shutdown()
 }
 
 
+/*  partr_coro() -- coroutine entry point
+ */
+static void partr_coro(struct concurrent_ctx *ctx)
+{
+    ptask_t *task = ctx_get_user_ptr(ctx);
+    task->ret = task->f(task->arg);
+}
+
+
+/*  release_task() -- destroy the coroutine context and free the task
+ */
+static void *release_task(ptask_t *task)
+{
+    void *ret = task->ret;
+    ctx_destruct(task->ctx);
+    task->ret = task->arg = task->f = NULL;
+    task_free(task);
+    return ret;
+}
+
+
+/* run_next() -- get the next available task and run it
+ */
+static int run_next()
+{
+    ptask_t *task = multiq_deletemin();
+    LOG_DEBUG(plog, "  thread %d resuming task %p\n", tid, task);
+    curr_task = task;
+    int64_t y = (int64_t)resume(task->ctx);
+    curr_task = NULL;
+    if (!ctx_is_done(task->ctx)) {
+        if (y != yield_from_sync) {
+            LOG_DEBUG(plog, "  thread %d had task %p yield\n", tid, task);
+            multiq_insert(task, task->prio);
+        }
+        return 0;
+    }
+    LOG_DEBUG(plog, "  thread %d completed task %p\n", tid, task);
+
+    /* the task completed; as detached tasks cannot be synced, clean
+       those up here 
+     */
+    if (task->detached) {
+        release_task(task);
+        return 0;
+    }
+
+    /* add all the tasks in this one's completion queue to the ready queue */
+    while (__atomic_test_and_set(&task->cq_lock, __ATOMIC_ACQUIRE))
+        cpu_pause();
+    ptask_t *cqtask, *cqnext;
+    cqtask = task->cq;
+    task->cq = NULL;
+    while (cqtask) {
+        cqnext = cqtask->cq_next;
+        cqtask->cq_next = NULL;
+        LOG_DEBUG(plog, "  thread %d adding task %p's CQ: %p\n",
+                    tid, task, cqtask);
+        multiq_insert(cqtask, cqtask->prio);
+        cqtask = cqnext;
+    }
+    __atomic_clear(&task->cq_lock, __ATOMIC_RELEASE);
+
+    return 0;
+}
+
+
+/*  partr_start() -- the runtime entry point
+
+    To be called from thread 0, before creating any tasks. Wraps into
+    a task and invokes `f(arg)`; tasks should only be spawned/synced
+    from within tasks.
+ */
+int partr_start(void **ret, void *(*f)(void *), void *arg)
+{
+    ptask_t *task = task_alloc();
+    if (task == NULL)
+        return -1;
+    task->f = f;
+    task->arg = arg;
+    task->detached = 0;
+    ctx_construct(task->ctx, task->stack, TASK_STACK_SIZE, partr_coro, task);
+
+    LOG_DEBUG(plog, "  thread %d invoking start task %p\n", tid, task);
+    curr_task = task;
+    int64_t y = (int64_t)resume(task->ctx);
+    curr_task = NULL;
+
+    if (!ctx_is_done(task->ctx)) {
+        LOG_DEBUG(plog, "  thread %d had start task %p yield\n", tid, task);
+        if (y != yield_from_sync)
+            multiq_insert(task, tid);
+        while (run_next() == 0)
+            ;
+    }
+
+    *ret = release_task(task);
+
+    LOG_INFO(plog, "  thread %d released start task %p\n", tid, task);
+    return 0;
+}
+
+
 /*  partr_thread() -- the thread function
+
+    Loops, getting tasks from the multiqueue and executing them.
  */
 static void *partr_thread(void *arg_)
 {
@@ -275,82 +383,41 @@ static void *partr_thread(void *arg_)
     /* free the thread function argument */
     free(arg);
 
-    /* task execution */
-    ptask_t *task = NULL;
-    void *taskarg;
-    int16_t nobody = NO_THREAD;
-
     /* get the highest priority task and run it */
-    for (; ;) {
-        task = multiq_deletemin();
-        LOG_DEBUG(plog, "  thread %d resuming task %p\n", tid, task);
-        resume(task->ctx);
-        if (!ctx_is_done(task->ctx)) {
-            LOG_DEBUG(plog, "  thread %d had task %p yield\n", tid, task);
-            multiq_insert(task, tid);
-            continue;
-        }
-        LOG_DEBUG(plog, "  thread %d completed task %p\n", tid, task);
-
-        /* add this task's completion queue to the ready queue */
-        while (__atomic_test_and_set(&task->cq_lock, __ATOMIC_ACQUIRE))
-            cpu_pause();
-        ptask_t *cqtask, *cqnext;
-        cqtask = task->cq;
-        while (cqtask) {
-            cqnext = cqtask->cq_next;
-            cqtask->cq_next = NULL;
-            LOG_DEBUG(plog, "  thread %d adding task %p's CQ: %p\n",
-                        tid, task, cqtask);
-            multiq_insert(cqtask, cqtask->prio);
-            cqtask = cqnext;
-        }
-        __atomic_clear(&task->cq_lock, __ATOMIC_RELEASE);
-
-        /* clean up task? */
-        if (task->detached) {
-        }
-    }
+    while (run_next() == 0)
+        ;
 
     LOG_INFO(plog, "  thread %d exiting\n", tid);
     return NULL;
 }
 
 
-static void partr_coro(struct concurrent_ctx *ctx)
-{
-    ptask_t *task = ctx_get_user_ptr(ctx);
-    task->ret = task->f(task->arg);
-}
-
-
 /*  partr_spawn() -- create a task for `f(arg)` and enqueue it for execution
 
     Implicitly asserts that `f(arg)` can run concurrently with everything
-    else that's currently running. If `detach` is `true`, the spawned task
+    else that's currently running. If `detach` is set, the spawned task
     will not be returned (and cannot be synced).
  */
-bool partr_spawn(partr_t *t, void *(*f)(void *), void *arg, bool detach)
+int partr_spawn(partr_t *t, void *(*f)(void *), void *arg, int detach)
 {
     *t = NULL;
 
     ptask_t *task = task_alloc();
     if (task == NULL)
-        return false;
+        return -1;
     task->f = f;
     task->arg = arg;
     task->detached = detach;
     ctx_construct(task->ctx, task->stack, TASK_STACK_SIZE, partr_coro, task);
     if (multiq_insert(task, tid) != 0) {
-        ctx_destruct(task->ctx);
-        task->ret = task->arg = task->f = NULL;
-        task_free(task);
-        return false;
+        release_task(task);
+        return -2;
     }
     if (!detach)
         *t = (partr_t)task;
 
-    return true;
+    LOG_DEBUG(plog, "  thread %d task %p spawned task %p\n", tid, curr_task, task);
+    return 0;
 }
 
 
@@ -358,7 +425,7 @@ bool partr_spawn(partr_t *t, void *(*f)(void *), void *arg, bool detach)
 
     Returns only when task `t` has completed.
  */
-bool partr_sync(void **r, partr_t t, bool done_with_task)
+int partr_sync(void **r, partr_t t, int done_with_task)
 {
     ptask_t *task = (ptask_t *)t;
 
@@ -373,7 +440,7 @@ bool partr_sync(void **r, partr_t t, bool done_with_task)
 
         /* ensure the task didn't finish before we got the lock */
         if (!ctx_is_done(task->ctx)) {
-            LOG_DEBUG(plog, "  thread %d task %p sync on task %p; adding to CQ\n",
+            LOG_DEBUG(plog, "  thread %d task %p sync on task %p\n",
                           tid, curr_task, task);
 
             /* add the current task to the CQ */
@@ -388,7 +455,7 @@ bool partr_sync(void **r, partr_t t, bool done_with_task)
 
             /* unlock the CQ and yield the current task */
             __atomic_clear(&task->cq_lock, __ATOMIC_RELEASE);
-            yield(curr_task);
+            yield_value(curr_task->ctx, (void *)yield_from_sync);
         }
 
         /* the task finished before we could add to its CQ */
@@ -399,22 +466,19 @@ bool partr_sync(void **r, partr_t t, bool done_with_task)
         }
     }
 
-    *r = task-ret;
+    *r = task->ret;
 
-    if (done_with_task) {
-        ctx_destruct(task->ctx);
-        task->ret = task->arg = task->f = NULL;
-        task_free(task);
-    }
+    if (done_with_task)
+        release_task(task);
 
-    return true;
+    return 0;
 }
 
 
 /*  partr_parfor()
  */
-partr_t partr_parfor(void *(*f)(void *), void *arg)
+int partr_parfor(partr_t *t, void *(*f)(void *), void *arg)
 {
-    return NULL;
+    return -1;
 }
 

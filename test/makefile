@@ -40,7 +40,7 @@ endif
 
 all: $(BINS)
 
-$(BINS): $(SRCS) $(TAPOBJ)
+$(BINS): $(SRCS) $(TAPOBJ) ../libpartr.a
 	$(CC) $(CFLAGS) taskpoolstest.c -o taskpoolstest $(LDOBJS)
 	$(CC) $(CFLAGS) multiqtest.c -o multiqtest $(LDOBJS)
 	$(CC) $(CFLAGS) fib.c -o fib $(LDOBJS)
