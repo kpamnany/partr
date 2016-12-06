@@ -28,7 +28,7 @@ LDOBJS+=../../libconcurrent/libconcurrent.a
 TAPSRC=tap.c
 TAPOBJ=tap.o
 
-SRCS=taskpoolstest.c multiqtest.c fib.c
+SRCS=taskpoolstest.c multiqtest.c parfortest.c fib.c
 OBJS=$(subst .c,.o, $(SRCS))
 BINS=$(subst .c,, $(SRCS))
 
@@ -43,6 +43,7 @@ all: $(BINS)
 $(BINS): $(SRCS) $(TAPOBJ) ../libpartr.a
 	$(CC) $(CFLAGS) taskpoolstest.c -o taskpoolstest $(LDOBJS)
 	$(CC) $(CFLAGS) multiqtest.c -o multiqtest $(LDOBJS)
+	$(CC) $(CFLAGS) parfortest.c -o parfortest $(LDOBJS)
 	$(CC) $(CFLAGS) fib.c -o fib $(LDOBJS)
 
 $(TAPOBJ): $(TAPSRC)

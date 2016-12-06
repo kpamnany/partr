@@ -1,3 +1,6 @@
+# VIM files
+.*.swp
+
 # Object files
 *.o
 *.ko
@@ -21,6 +24,10 @@
 *.dylib
 
 # Executables
+fib
+parfortest
+multiqtest
+taskpoolstest
 *.exe
 *.out
 *.app

@@ -40,7 +40,10 @@ static void *partr_thread(void *arg_);
 /* internally used to indicate a yield occurred in the runtime itself */
 static const int64_t yield_from_sync = 1;
 
-/* thread barrier */
+/* a parfor range is split into at most K*nthreads tasks */
+static const int16_t K = 4;
+
+/* initialization thread barrier */
 static int volatile barcnt;
 static int volatile barsense = 1;
 
@@ -261,7 +264,27 @@ void partr_shutdown()
 static void partr_coro(struct concurrent_ctx *ctx)
 {
     ptask_t *task = ctx_get_user_ptr(ctx);
-    task->ret = task->f(task->arg);
+    task->ret = task->f(task->arg, task->start, task->end);
+}
+
+
+/*  setup_task() -- allocate and initialize a task
+ */
+static ptask_t *setup_task(void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t start, int64_t end)
+{
+    ptask_t *task = task_alloc();
+    if (task == NULL)
+        return NULL;
+
+    ctx_construct(task->ctx, task->stack, TASK_STACK_SIZE, partr_coro, task);
+    task->f = f;
+    task->arg = arg;
+    task->start = start;
+    task->end = end;
+    task->detached = 0;
+
+    return task;
 }
 
 
@@ -272,6 +295,7 @@ static void *release_task(ptask_t *task)
     void *ret = task->ret;
     ctx_destruct(task->ctx);
     task->ret = task->arg = task->f = NULL;
+    task->start = task->end = 0;
     task_free(task);
     return ret;
 }
@@ -329,15 +353,12 @@ static int run_next()
     a task and invokes `f(arg)`; tasks should only be spawned/synced
     from within tasks.
  */
-int partr_start(void **ret, void *(*f)(void *), void *arg)
+int partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t start, int64_t end)
 {
-    ptask_t *task = task_alloc();
+    ptask_t *task = setup_task(f, arg, start, end);
     if (task == NULL)
         return -1;
-    task->f = f;
-    task->arg = arg;
-    task->detached = 0;
-    ctx_construct(task->ctx, task->stack, TASK_STACK_SIZE, partr_coro, task);
 
     LOG_DEBUG(plog, "  thread %d invoking start task %p\n", tid, task);
     curr_task = task;
@@ -398,23 +419,20 @@ static void *partr_thread(void *arg_)
     else that's currently running. If `detach` is set, the spawned task
     will not be returned (and cannot be synced).
  */
-int partr_spawn(partr_t *t, void *(*f)(void *), void *arg, int detach)
+int partr_spawn(partr_t *t, void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t start, int64_t end, int8_t detach)
 {
-    *t = NULL;
-
-    ptask_t *task = task_alloc();
+    ptask_t *task = setup_task(f, arg, start, end);
     if (task == NULL)
         return -1;
-    task->f = f;
-    task->arg = arg;
     task->detached = detach;
-    ctx_construct(task->ctx, task->stack, TASK_STACK_SIZE, partr_coro, task);
+
     if (multiq_insert(task, tid) != 0) {
         release_task(task);
         return -2;
     }
-    if (!detach)
-        *t = (partr_t)task;
+
+    *t = detach ? NULL : (partr_t)task;
 
     LOG_DEBUG(plog, "  thread %d task %p spawned task %p\n", tid, curr_task, task);
     return 0;
@@ -475,10 +493,39 @@ int partr_sync(void **r, partr_t t, int done_with_task)
 }
 
 
-/*  partr_parfor()
+/*  partr_parfor() -- spawn multiple tasks for a parallel loop
+
+    Spawn tasks that invoke `f(arg, start, end)` such that the sum of `end-start`
+    for all tasks is `count`.
+
+    TODO: sync
+    TODO: reduction
  */
-int partr_parfor(partr_t *t, void *(*f)(void *), void *arg)
+int partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t count, void *(*rf)(void *))
 {
-    return -1;
+    int64_t n = K*nthreads;
+    lldiv_t each = lldiv(count, n);
+
+    int64_t start = 0, end;
+    for (int64_t i = 0;  i < n;  ++i) {
+        end = start + each.quot + (i < each.rem ? 1 : 0);
+        ptask_t *task = setup_task(f, arg, start, end);
+        if (task == NULL) {
+            LOG_CRITICAL(plog, "  thread %d parfor task setup failed!\n", tid);
+            return -1;
+        }
+
+        if (multiq_insert(task, tid) != 0) {
+            release_task(task);
+            LOG_CRITICAL(plog, "  thread %d parfor multiq insertion failed!\n", tid);
+            return -2;
+        }
+        start = end;
+    }
+
+    LOG_DEBUG(plog, "  thread %d task %p parfor spawned %lld tasks\n",
+            tid, curr_task, n);
+    return 0;
 }
 

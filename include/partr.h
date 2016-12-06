@@ -44,10 +44,13 @@ typedef void *partr_t;
 
 void partr_init();
 void partr_shutdown();
-int partr_start(void **ret, void *(*f)(void *), void *arg);
-int partr_spawn(partr_t *t, void *(*f)(void *), void *arg, int detach);
-int partr_sync(void **r, partr_t t, int done_with_task);
-int partr_parfor(partr_t *t, void *(*f)(void *), void *arg);
+int  partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t start, int64_t end);
+int  partr_spawn(partr_t *t, void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t start, int64_t end, int8_t detach);
+int  partr_sync(void **r, partr_t t, int done_with_task);
+int  partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
+        void *arg, int64_t count, void *(*rf)(void *));
 
 
 #endif /* PARTR_H */
