@@ -11,16 +11,8 @@
 #include <concurrent/shortname.h>
 
 
-enum {
-    PARTR_ONETASK,
-    PARTR_NTASKS,
-    PARTR_EXITTASK
-};
-
-
-typedef struct p1task_tag p1task_t;
-typedef struct pntask_tag pntask_t;
-
+typedef struct arriver_tag arriver_t;
+typedef struct reducer_tag reducer_t;
 
 typedef struct ptask_tag ptask_t;
 
@@ -29,10 +21,18 @@ struct ptask_tag {
     struct concurrent_ctx *ctx;
     uint8_t               *stack;
 
-    /* task entry point, argument, and result */
+    /* task entry point, arguments, result, reduction function */
     void    *(*f)(void *, int64_t, int64_t);
     void    *arg, *ret;
     int64_t start, end;
+    void    *(*rf)(void *, void *);
+
+    /* the index of this task in the set of grains of a parfor */
+    int16_t grain_num;
+
+    /* to synchronize/reduce grains of a parfor */
+    arriver_t *arr;
+    reducer_t *red;
 
     /* tasks to run on completion */
     ptask_t *cq, *cq_next;

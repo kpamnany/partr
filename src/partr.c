@@ -15,6 +15,7 @@
 
 #include "perfutil.h"
 #include "congrng.h"
+#include "synctreepool.h"
 #include "taskpools.h"
 #include "multiq.h"
 
@@ -39,9 +40,6 @@ static void *partr_thread(void *arg_);
 
 /* internally used to indicate a yield occurred in the runtime itself */
 static const int64_t yield_from_sync = 1;
-
-/* a parfor range is split into at most K*nthreads tasks */
-static const int16_t K = 4;
 
 /* initialization thread barrier */
 static int volatile barcnt;
@@ -202,6 +200,9 @@ void partr_init()
     /* initialize task pools */
     taskpools_init();
 
+    /* initialize sync trees */
+    synctreepool_init();
+
     /* initialize task multiqueue */
     multiq_init();
 
@@ -254,6 +255,9 @@ void partr_shutdown()
     /* destroy the task queues */
     multiq_destroy();
 
+    /* destroy the sync trees */
+    synctreepool_destroy();
+
     /* destroy the task pools and free all tasks */
     taskpools_destroy();
 }
@@ -271,7 +275,7 @@ static void partr_coro(struct concurrent_ctx *ctx)
 /*  setup_task() -- allocate and initialize a task
  */
 static ptask_t *setup_task(void *(*f)(void *, int64_t, int64_t),
-        void *arg, int64_t start, int64_t end)
+        void *arg, int64_t start, int64_t end, void *(*rf)(void *, void *))
 {
     ptask_t *task = task_alloc();
     if (task == NULL)
@@ -282,6 +286,7 @@ static ptask_t *setup_task(void *(*f)(void *, int64_t, int64_t),
     task->arg = arg;
     task->start = start;
     task->end = end;
+    task->rf = rf;
     task->detached = 0;
 
     return task;
@@ -318,6 +323,21 @@ static int run_next()
         return 0;
     }
     LOG_DEBUG(plog, "  thread %d completed task %p\n", tid, task);
+
+    /* if there is a reducer, we need to synchronize with other tasks */
+    if (task->red) {
+        void *ret = reduce(task->arr, task->red, task->rf,
+                           task->ret, task->grain_num);
+        if (ret) {
+        }
+    }
+
+    /* there's no reducer, but may still need to synchronize with other
+       tasks if there's an arriver */
+    else if (task->arr) {
+        if (last_arriver(task->arr, task->grain_num)) {
+        }
+    }
 
     /* the task completed; as detached tasks cannot be synced, clean
        those up here 
@@ -356,7 +376,7 @@ static int run_next()
 int partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
         void *arg, int64_t start, int64_t end)
 {
-    ptask_t *task = setup_task(f, arg, start, end);
+    ptask_t *task = setup_task(f, arg, start, end, NULL);
     if (task == NULL)
         return -1;
 
@@ -417,12 +437,12 @@ static void *partr_thread(void *arg_)
 
     Implicitly asserts that `f(arg)` can run concurrently with everything
     else that's currently running. If `detach` is set, the spawned task
-    will not be returned (and cannot be synced).
+    will not be returned (and cannot be synced). Yields.
  */
 int partr_spawn(partr_t *t, void *(*f)(void *, int64_t, int64_t),
         void *arg, int64_t start, int64_t end, int8_t detach)
 {
-    ptask_t *task = setup_task(f, arg, start, end);
+    ptask_t *task = setup_task(f, arg, start, end, NULL);
     if (task == NULL)
         return -1;
     task->detached = detach;
@@ -435,6 +455,9 @@ int partr_spawn(partr_t *t, void *(*f)(void *, int64_t, int64_t),
     *t = detach ? NULL : (partr_t)task;
 
     LOG_DEBUG(plog, "  thread %d task %p spawned task %p\n", tid, curr_task, task);
+
+    yield(curr_task->ctx);
+
     return 0;
 }
 
@@ -496,36 +519,60 @@ int partr_sync(void **r, partr_t t, int done_with_task)
 /*  partr_parfor() -- spawn multiple tasks for a parallel loop
 
     Spawn tasks that invoke `f(arg, start, end)` such that the sum of `end-start`
-    for all tasks is `count`.
-
-    TODO: sync
-    TODO: reduction
+    for all tasks is `count`. Uses `rf()`, if provided, to reduce the return
+    values from the tasks, and returns the result. Yields.
  */
 int partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
-        void *arg, int64_t count, void *(*rf)(void *))
+        void *arg, int64_t count, void *(*rf)(void *, void *))
 {
-    int64_t n = K*nthreads;
+    int64_t n = GRAIN_K * nthreads;
     lldiv_t each = lldiv(count, n);
 
+    /* allocate synchronization tree(s) */
+    arriver_t *arr = arriver_alloc();
+    if (arr == NULL) {
+        LOG_CRITICAL(plog, "  thread %d parfor arriver alloc failed!\n", tid);
+        return -1;
+    }
+    reducer_t *red = NULL;
+    if (rf != NULL) {
+        red = reducer_alloc();
+        if (red == NULL) {
+            LOG_CRITICAL(plog, "  thread %d parfor reducer alloc failed!\n", tid);
+            return -2;
+        }
+    }
+
+    /* allocate and enqueue (GRAIN_K * nthreads) tasks */
+    *t = NULL;
     int64_t start = 0, end;
     for (int64_t i = 0;  i < n;  ++i) {
         end = start + each.quot + (i < each.rem ? 1 : 0);
-        ptask_t *task = setup_task(f, arg, start, end);
+        ptask_t *task = setup_task(f, arg, start, end, rf);
         if (task == NULL) {
             LOG_CRITICAL(plog, "  thread %d parfor task setup failed!\n", tid);
             return -1;
         }
+        task->grain_num = i;
+        task->arr = arr;
+        task->red = red;
 
         if (multiq_insert(task, tid) != 0) {
             release_task(task);
-            LOG_CRITICAL(plog, "  thread %d parfor multiq insertion failed!\n", tid);
-            return -2;
+            LOG_CRITICAL(plog, "  thread %d parfor multiq insert failed!\n", tid);
+            return -3;
         }
+
+        if (*t == NULL) *t = task;
+
         start = end;
     }
 
     LOG_DEBUG(plog, "  thread %d task %p parfor spawned %lld tasks\n",
             tid, curr_task, n);
+
+    yield(curr_task->ctx);
+
     return 0;
 }
 

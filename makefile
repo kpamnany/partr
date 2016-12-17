@@ -19,7 +19,7 @@ CFLAGS+=-I../libconcurrent/include
 CFLAGS+=-I./include
 CFLAGS+=-I./src
 
-SRCS=src/partr.c src/taskpools.c src/multiq.c src/congrng.c
+SRCS=src/partr.c src/synctreepool.c src/taskpools.c src/multiq.c src/congrng.c
 OBJS=$(subst .c,.o, $(SRCS))
 
 ifeq ($(DEBUG),yes)

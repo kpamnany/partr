@@ -60,7 +60,7 @@ static void sift_up(taskheap_t *heap, int16_t idx)
 {
     if (idx > 0) {
         int16_t parent = (idx-1)/heap_d;
-        if (heap->tasks[idx]->prio < heap->tasks[parent]->prio) {
+        if (heap->tasks[idx]->prio <= heap->tasks[parent]->prio) {
             ptask_t *t = heap->tasks[parent];
             heap->tasks[parent] = heap->tasks[idx];
             heap->tasks[idx] = t;
@@ -79,7 +79,7 @@ void sift_down(taskheap_t *heap, int16_t idx)
                 child < MULTIQ_TASKS_PER_HEAP && child <= heap_d*idx + heap_d;
                 ++child) {
             if (heap->tasks[child]
-                    &&  heap->tasks[child]->prio < heap->tasks[idx]->prio) {
+                    &&  heap->tasks[child]->prio <= heap->tasks[idx]->prio) {
                 ptask_t *t = heap->tasks[idx];
                 heap->tasks[idx] = heap->tasks[child];
                 heap->tasks[child] = t;
