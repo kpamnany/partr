@@ -268,7 +268,44 @@ void partr_shutdown()
 static void partr_coro(struct concurrent_ctx *ctx)
 {
     ptask_t *task = ctx_get_user_ptr(ctx);
-    task->ret = task->f(task->arg, task->start, task->end);
+    task->result = task->f(task->arg, task->start, task->end);
+
+    /* grain tasks must synchronize */
+    if (task->grain_num >= 0) {
+        int was_last = 0;
+
+        /* reduce... */
+        if (task->red) {
+            task->result = reduce(task->arr, task->red, task->rf,
+                                  task->result, task->grain_num);
+            /*  if this task is last, set the result in the parent task */
+            if (task->result) {
+                task->parent->red_result = task->result;
+                was_last = 1;
+            }
+        }
+        /* ... or just sync */
+        else {
+            if (last_arriver(task->arr, task->grain_num))
+                was_last = 1;
+        }
+
+        /* the last task to finish needs to finish up the loop */
+        if (was_last) {
+            /* a non-parent task must wake up the parent */
+            if (task->grain_num > 0)
+                multiq_insert(task->parent, 0);
+            /* tthe parent task was last; it can just end */
+        }
+        else {
+            /* the parent task needs to wait */
+            if (task->grain_num == 0)
+                yield_value(task->ctx, (void *)yield_from_sync);
+        }
+
+        if (task->grain_num == 0)
+            LOG_DEBUG(plog, "  thread %d completed loop task %p\n", tid, task);
+    }
 }
 
 
@@ -297,16 +334,18 @@ static ptask_t *setup_task(void *(*f)(void *, int64_t, int64_t),
  */
 static void *release_task(ptask_t *task)
 {
-    void *ret = task->ret;
+    void *result = task->result;
     ctx_destruct(task->ctx);
-    task->ret = task->arg = task->f = NULL;
+    task->f = NULL;
+    task->result = task->arg = NULL;
     task->start = task->end = 0;
+    task->rf = NULL;
     task_free(task);
-    return ret;
+    return result;
 }
 
 
-/* run_next() -- get the next available task and run it
+/*  run_next() -- get the next available task and run it
  */
 static int run_next()
 {
@@ -323,21 +362,6 @@ static int run_next()
         return 0;
     }
     LOG_DEBUG(plog, "  thread %d completed task %p\n", tid, task);
-
-    /* if there is a reducer, we need to synchronize with other tasks */
-    if (task->red) {
-        void *ret = reduce(task->arr, task->red, task->rf,
-                           task->ret, task->grain_num);
-        if (ret) {
-        }
-    }
-
-    /* there's no reducer, but may still need to synchronize with other
-       tasks if there's an arriver */
-    else if (task->arr) {
-        if (last_arriver(task->arr, task->grain_num)) {
-        }
-    }
 
     /* the task completed; as detached tasks cannot be synced, clean
        those up here 
@@ -507,7 +531,7 @@ int partr_sync(void **r, partr_t t, int done_with_task)
         }
     }
 
-    *r = task->ret;
+    *r = task->result;
 
     if (done_with_task)
         release_task(task);
@@ -553,6 +577,14 @@ int partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
             LOG_CRITICAL(plog, "  thread %d parfor task setup failed!\n", tid);
             return -1;
         }
+
+        /* The first task is the parent (root) task of the parfor, thus only
+           this can be synced. So, we create the remaining tasks detached.
+         */
+        if (*t == NULL) *t = task;
+        else task->detached = 1;
+
+        task->parent = *t;
         task->grain_num = i;
         task->arr = arr;
         task->red = red;
@@ -562,8 +594,6 @@ int partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
             LOG_CRITICAL(plog, "  thread %d parfor multiq insert failed!\n", tid);
             return -3;
         }
-
-        if (*t == NULL) *t = task;
 
         start = end;
     }

@@ -23,9 +23,12 @@ struct ptask_tag {
 
     /* task entry point, arguments, result, reduction function */
     void    *(*f)(void *, int64_t, int64_t);
-    void    *arg, *ret;
+    void    *arg, *result;
     int64_t start, end;
     void    *(*rf)(void *, void *);
+
+    /* parent (first) task of a parfor set */
+    ptask_t *parent;
 
     /* the index of this task in the set of grains of a parfor */
     int16_t grain_num;
@@ -33,6 +36,9 @@ struct ptask_tag {
     /* to synchronize/reduce grains of a parfor */
     arriver_t *arr;
     reducer_t *red;
+
+    /* parfor reduction result */
+    void *red_result;
 
     /* tasks to run on completion */
     ptask_t *cq, *cq_next;
