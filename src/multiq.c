@@ -124,10 +124,10 @@ int multiq_insert(ptask_t *task, int16_t priority)
 ptask_t *multiq_deletemin()
 {
     uint64_t rn1, rn2;
-    int16_t prio1, prio2;
+    int16_t i, prio1, prio2;
     ptask_t *task;
 
-    for (; ;) {
+    for (i = 0;  i < nthreads;  ++i) {
         rn1 = cong(heap_p, cong_unbias, &rngseed);
         rn2 = cong(heap_p, cong_unbias, &rngseed);
         prio1 = __atomic_load_n(&heaps[rn1].prio, __ATOMIC_SEQ_CST);
@@ -144,6 +144,9 @@ ptask_t *multiq_deletemin()
             __atomic_clear(&heaps[rn1].lock, __ATOMIC_RELEASE);
         }
     }
+    if (i == nthreads)
+        return NULL;
+
     task = heaps[rn1].tasks[0];
     heaps[rn1].tasks[0] = heaps[rn1].tasks[--heaps[rn1].ntasks];
     heaps[rn1].tasks[heaps[rn1].ntasks] = NULL;

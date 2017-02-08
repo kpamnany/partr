@@ -5,7 +5,7 @@
 # 2016.06.01   kiran.pamnany   Initial code
 #
 
-CC=gcc
+CC=icc
 
 .SUFFIXES: .c .h .o
 .PHONY: clean
@@ -29,6 +29,8 @@ TAPSRC=tap.c
 TAPOBJ=tap.o
 
 SRCS=taskpoolstest.c multiqtest.c parfortest.c fib.c
+OBJS=${SRCS:.c=.o}
+BINS=${SRCS:.c=}
 OBJS=$(subst .c,.o, $(SRCS))
 BINS=$(subst .c,, $(SRCS))
 
@@ -50,5 +52,5 @@ $(TAPOBJ): $(TAPSRC)
 	$(CC) $(CFLAGS) -c $(TAPSRC)
 
 clean:
-	$(RM) -f $(BINS) $(OBJS) $(TAPOBJ)
+	$(RM) $(BINS) $(OBJS) $(TAPOBJ)
 

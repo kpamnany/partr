@@ -9,7 +9,7 @@ log_t plog;
 int16_t nthreads;
 __thread int16_t tid;
 
-#define NTASKS_PER_POOL 512
+#define NTASKS_PER_POOL 1024
 static ptask_t *tasks[NTASKS_PER_POOL];
 
 /* thread barrier */

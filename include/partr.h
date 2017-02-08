@@ -56,6 +56,10 @@
 #define DEFAULT_MACHINE_EXCLUSIVE       0
     /* don't assume we own the machine */
 
+/* performance profiling */
+#define PERF_PROFILE                    1
+    /* comment to disable profiling */
+
 
 /* externally visible globals */
 extern log_t plog;                      /* message logger */
@@ -75,7 +79,8 @@ void partr_shutdown();
 int  partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
         void *arg, int64_t start, int64_t end);
 int  partr_spawn(partr_t *t, void *(*f)(void *, int64_t, int64_t),
-        void *arg, int64_t start, int64_t end, int8_t detach);
+        void *arg, int64_t start, int64_t end, int8_t sticky,
+        int8_t detach);
 int  partr_sync(void **r, partr_t t, int done_with_task);
 int  partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
         void *arg, int64_t count, void *(*rf)(void *, void *));

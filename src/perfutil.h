@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#define cpu_pause()                     __asm__("pause;");
+#define cpu_pause()  __asm__("pause;");
 
 static inline uint64_t rdtscp()
 {

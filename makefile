@@ -10,6 +10,7 @@ CC=icc
 .SUFFIXES: .c .h .o .a
 .PHONY: clean test
 
+CFLAGS+=-DPERF_PROFILE
 CFLAGS+=-Wall
 CFLAGS+=-std=c11
 CFLAGS+=-D_GNU_SOURCE
@@ -20,7 +21,8 @@ CFLAGS+=-I./include
 CFLAGS+=-I./src
 
 SRCS=src/partr.c src/synctreepool.c src/taskpools.c src/multiq.c src/congrng.c
-OBJS=$(subst .c,.o, $(SRCS))
+INCS=include/partr.h src/task.h src/synctreepool.h src/taskpools.h src/multiq.h src/congrng.h src/log.h src/perfutil.h src/profile.h
+OBJS=${SRCS:.c=.o}
 
 ifeq ($(DEBUG),yes)
     CFLAGS+=-O0 -g
@@ -36,13 +38,13 @@ test: $(TARGET)
 	$(MAKE) -C test
 
 $(TARGET): $(OBJS)
-	$(RM) -f $(TARGET)
+	$(RM) $(TARGET)
 	$(AR) qvs $(TARGET) $(OBJS)
 
-.c.o:
+%.o: %.c $(INCS) makefile
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
 	$(MAKE) -C test clean
-	$(RM) -f $(TARGET) $(OBJS)
+	$(RM) $(TARGET) $(OBJS)
 

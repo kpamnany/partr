@@ -34,6 +34,7 @@ void taskpools_init()
                     calloc(ctx_sizeof(), sizeof(uint8_t));
             ptaskpools[i].tasks[j].stack =
                     calloc(TASK_STACK_SIZE, sizeof(uint8_t));
+            ptaskpools[i].tasks[j].sticky_tid = -1;
             ptaskpools[i].tasks[j].grain_num = -1;
             __atomic_clear(&ptaskpools[i].tasks[j].cq_lock, __ATOMIC_RELAXED);
             ptaskpools[i].tasks[j].pool = i;
@@ -87,11 +88,12 @@ ptask_t *task_alloc()
  */
 void task_free(ptask_t *task)
 {
+    task->sticky_tid = -1;
     task->grain_num = -1;
     task->arr = NULL;
     task->red = NULL;
-    task->cq = task->cq_next = NULL;
-    task->detached = 0;
+    task->cq = task->next = NULL;
+    task->settings = 0;
 
     ptaskpool_t *pool = &ptaskpools[task->pool];
     __atomic_exchange(&pool->next_avail, &task->index, &task->next_avail,

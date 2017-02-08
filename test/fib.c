@@ -9,7 +9,7 @@ void *fib(void *arg_, int64_t start, int64_t end)
     if (n < 2)
         return (void *)n;
 
-    partr_spawn(&tx, fib, (void *)n-1, 0, 0, 0);
+    partr_spawn(&tx, fib, (void *)n-1, 0, 0, 0, 0);
     y = (int64_t)fib((void *)n-2, 0, 0);
     partr_sync((void *)&x, tx, 1);
 
