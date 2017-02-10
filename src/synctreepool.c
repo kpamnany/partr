@@ -208,7 +208,7 @@ void *reduce(arriver_t *arr, reducer_t *red, void *(*rf)(void *, void *),
 {
     int arrived, aidx = idx + (GRAIN_K * nthreads) - 1, ridx = aidx, nidx;
 
-    red->tree[ridx] = val;
+    *red->tree[ridx] = val;
     while (aidx > 0) {
         --aidx;
         aidx >>= 1;
@@ -217,12 +217,12 @@ void *reduce(arriver_t *arr, reducer_t *red, void *(*rf)(void *, void *),
 
         /* neighbor has already arrived, get its value and reduce it */
         nidx = ridx & 0x1 ? ridx + 1 : ridx - 1;
-        val = rf(val, red->tree[nidx]);
+        val = rf(val, *red->tree[nidx]);
 
         /* move up the tree */
         --ridx;
         ridx >>= 1;
-        red->tree[ridx] = val;
+        *red->tree[ridx] = val;
     }
 
     return val;

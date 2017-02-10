@@ -350,7 +350,7 @@ static void partr_coro(struct concurrent_ctx *ctx)
             /* a non-parent task must wake up the parent */
             if (task->grain_num > 0)
                 multiq_insert(task->parent, 0);
-            /* tthe parent task was last; it can just end */
+            /* the parent task was last; it can just end */
         }
         else {
             /* the parent task needs to wait */
@@ -706,7 +706,7 @@ int partr_sync(void **r, partr_t t, int done_with_task)
         }
     }
 
-    *r = task->result;
+    *r = task->grain_num >= 0 && task->red ? task->red_result : task->result;
 
     if (done_with_task)
         release_task(task);
