@@ -565,7 +565,8 @@ int partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
                 break;
     }
 
-    *ret = release_task(start_task);
+    if (ret)
+        *ret = release_task(start_task);
 
     LOG_INFO(plog, "  thread %d released start task %p\n", tid, start_task);
     return 0;
@@ -706,7 +707,9 @@ int partr_sync(void **r, partr_t t, int done_with_task)
         }
     }
 
-    *r = task->grain_num >= 0 && task->red ? task->red_result : task->result;
+    if (r)
+        *r = task->grain_num >= 0 && task->red ?
+                task->red_result : task->result;
 
     if (done_with_task)
         release_task(task);

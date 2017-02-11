@@ -24,6 +24,7 @@
 *.dylib
 
 # Executables
+l3d
 fib
 parfortest
 multiqtest
