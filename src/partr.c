@@ -565,10 +565,11 @@ int partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
                 break;
     }
 
+    void *r = release_task(start_task);
     if (ret)
-        *ret = release_task(start_task);
+        *ret = r;
 
-    LOG_INFO(plog, "  thread %d released start task %p\n", tid, start_task);
+    LOG_DEBUG(plog, "  thread %d released start task %p\n", tid, start_task);
     return 0;
 }
 
