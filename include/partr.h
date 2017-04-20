@@ -34,7 +34,7 @@
 #define REDUCERS_FRAC                   1
     /* nreducers = narrivers * REDUCERS_FRAC */
 
-/* logging (debug, info, warn, err, critical) */
+/* logging (debug, info, warn, err, critical, none) */
 #define LOG_LEVEL_NAME                  "PARTR_LOG_LEVEL"
     /* environment variable name */
 #define DEFAULT_LOG_LEVEL               "debug"

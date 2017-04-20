@@ -347,15 +347,24 @@ static void partr_coro(struct concurrent_ctx *ctx)
 
         /* the last task to finish needs to finish up the loop */
         if (was_last) {
+            LOG_DEBUG(plog, "  thread %d loop task %p (grain %d) was last\n",
+                      tid, task, task->grain_num);
+
             /* a non-parent task must wake up the parent */
-            if (task->grain_num > 0)
+            if (task->grain_num > 0) {
+                LOG_DEBUG(plog, "  thread %d waking loop parent task %p\n",
+                          tid, task->parent);
                 multiq_insert(task->parent, 0);
+            }
             /* the parent task was last; it can just end */
         }
         else {
             /* the parent task needs to wait */
-            if (task->grain_num == 0)
+            if (task->grain_num == 0) {
+                LOG_DEBUG(plog, "  thread %d loop parent task %p yielding\n",
+                          tid, task);
                 yield_value(task->ctx, (void *)yield_from_sync);
+            }
         }
 
         if (task->grain_num == 0)
@@ -378,7 +387,8 @@ static ptask_t *setup_task(void *(*f)(void *, int64_t, int64_t), void *arg,
     task->arg = arg;
     task->start = start;
     task->end = end;
-    task->settings = 0;
+    task->sticky_tid = -1;
+    task->grain_num = -1;
 
     return task;
 }
@@ -390,10 +400,17 @@ static void *release_task(ptask_t *task)
 {
     void *result = task->result;
     ctx_destruct(task->ctx);
+    if (task->grain_num == 0  &&  task->red)
+        reducer_free(task->red);
+    if (task->grain_num == 0  &&  task->arr)
+        arriver_free(task->arr);
     task->f = NULL;
-    task->result = task->arg = NULL;
+    task->arg = task->result = task->red_result = NULL;
     task->start = task->end = 0;
     task->rf = NULL;
+    task->parent = task->cq = NULL;
+    task->arr = NULL;
+    task->red = NULL;
     task_free(task);
     return result;
 }
@@ -436,9 +453,10 @@ static ptask_t *get_from_taskq()
         cpu_pause();
 
     ptask_t *task = *taskq;
-    if (task)
+    if (task) {
         *taskq = task->next;
-    task->next = NULL;
+        task->next = NULL;
+    }
 
     __atomic_clear(taskq_lock, __ATOMIC_RELEASE);
 
@@ -745,6 +763,7 @@ int partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
     if (rf != NULL) {
         red = reducer_alloc();
         if (red == NULL) {
+            arriver_free(arr);
             LOG_CRITICAL(plog, "  thread %d parfor reducer alloc failed!\n", tid);
             return -2;
         }

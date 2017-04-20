@@ -27,7 +27,7 @@ typedef struct ptask_tag ptask_t;
 
 /* a task */
 struct ptask_tag {
-    /* `next` pointer to link this task into queues */
+    /* to link this task into queues */
     ptask_t *next;
 
     /* coroutine context and stack */
