@@ -26,12 +26,12 @@ typedef struct thread_timing_tag {
 thread_timing_t **thread_times;
 
 #define PROFILE_SETUP()                                                       \
-    thread_times = (thread_timing_t **)                                       \
-            _mm_malloc(nthreads * sizeof (thread_timing_t *), 64);
+    posix_memalign((void **)&thread_times,                                    \
+                   64, nthreads * sizeof(thread_timing_t *));
 
 #define PROFILE_INIT_THREAD()                                                 \
-    thread_times[tid] = (thread_timing_t *)                                   \
-        _mm_malloc(NTIMES * sizeof (thread_timing_t), 64);                    \
+    posix_memalign((void **)&thread_times[tid], 64,                           \
+                   NTIMES * sizeof(thread_timing_t));                         \
     for (int i = 0;  i < NTIMES;  i++) {                                      \
         thread_times[tid][i].last = thread_times[tid][i].max =                \
                 thread_times[tid][i].total = thread_times[tid][i].count = 0;  \

@@ -5,7 +5,7 @@
 # 2016.06.01   kiran.pamnany   Initial code
 #
 
-CC=icc
+CC=gcc
 
 .SUFFIXES: .c .h .o
 .PHONY: clean
@@ -28,7 +28,7 @@ LDOBJS+=../../libconcurrent/libconcurrent.a
 TAPSRC=tap.c
 TAPOBJ=tap.o
 
-SRCS=taskpoolstest.c multiqtest.c parfortest.c fib.c l3d.c
+SRCS=taskpoolstest.c multiqtest.c parfortest.c fib.c l3d.c l3d_partr.c
 OBJS=${SRCS:.c=.o}
 BINS=${SRCS:.c=}
 OBJS=$(subst .c,.o, $(SRCS))
@@ -43,7 +43,8 @@ endif
 all: $(BINS)
 
 $(BINS): $(SRCS) $(TAPOBJ) ../libpartr.a
-	$(CC) -qopenmp $(CFLAGS) l3d.c -o l3d $(LDOBJS)
+	#$(CC) -fopenmp $(CFLAGS) l3d.c -o l3d $(LDOBJS)
+	$(CC) $(CFLAGS) l3d_partr.c -o l3d_partr $(LDOBJS)
 	$(CC) $(CFLAGS) taskpoolstest.c -o taskpoolstest $(LDOBJS)
 	$(CC) $(CFLAGS) multiqtest.c -o multiqtest $(LDOBJS)
 	$(CC) $(CFLAGS) parfortest.c -o parfortest $(LDOBJS)

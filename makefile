@@ -5,7 +5,7 @@
 # 2016.06.01   kiran.pamnany   Initial code
 #
 
-CC=icc
+CC=gcc
 
 .SUFFIXES: .c .h .o .a
 .PHONY: clean test

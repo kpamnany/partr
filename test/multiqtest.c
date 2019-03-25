@@ -40,6 +40,9 @@ typedef struct lthread_arg_tag {
     int16_t tid;
 } lthread_arg_t;
 
+/* used for reducing across threads */
+static int N = 0;
+
 
 static void *threadfun(void *targ)
 {
@@ -85,7 +88,7 @@ static void *threadfun(void *targ)
             if (task->prio > curr_prio)
                 curr_prio = task->prio;
             else if (task->prio < curr_prio) {
-                diag("curr_prio: %d, task->prio: %d\n", curr_prio, task->prio);
+                diag("(tid %d) curr_prio: %d, task->prio: %d\n", tid, curr_prio, task->prio);
                 ++ooo;
                 curr_prio = task->prio;
             }
@@ -117,29 +120,30 @@ static void *threadfun(void *targ)
     BARRIER();
 
     /* parallel deletemin tests */
-    success[tid] = 1;
-    curr_prio = 0;
+    curr_prio = ooo = 0;
+    int ndeq = 0;
     for (int16_t i = 0;  i < NTASKS_PER_POOL/nthreads;  ++i) {
         task = multiq_deletemin();
         if (task == NULL) {
-            success[tid] = 0;
-            break;
+            diag("(tid %d) !task\n", tid);
+            continue;
         }
+        ++ndeq;
         if (task->prio > curr_prio)
             curr_prio = task->prio;
         else if (task->prio < curr_prio) {
-            diag("curr_prio: %d, task->prio: %d\n", curr_prio, task->prio);
+            diag("(tid %d) curr_prio: %d, task->prio: %d\n", tid, curr_prio, task->prio);
+            ++ooo;
             curr_prio = task->prio;
         }
     }
+    __atomic_add_fetch(&N, ndeq, __ATOMIC_SEQ_CST);
 
     BARRIER();
 
     if (tid == 0) {
-        for (int16_t i = 1;  i < nthreads;  ++i)
-            if (!success[i])
-                success[0] = 0;
-        ok(success[0], "parallel deletemin", ooo);
+        ok(N == NTASKS_PER_POOL, "parallel deletemin %d tasks (%d out-of-order)", N, ooo);
+
         for (int16_t i = 0;  i < NTASKS_PER_POOL;  ++i)
             task_free(tasks[i]);
 

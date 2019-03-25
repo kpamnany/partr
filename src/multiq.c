@@ -5,24 +5,38 @@
 
 
 #include <stdlib.h>
+#include <pthread.h>
 #include "partr.h"
 #include "multiq.h"
 #include "congrng.h"
+#include "perfutil.h"
 
 
+/* individual spin-lock synchronized task heap */
 typedef struct taskheap_tag {
     char lock;
     ptask_t **tasks;
     int16_t ntasks, prio;
 } taskheap_t;
 
+/* heap 'n'ary */
 static const int16_t heap_d = 8;
 
+/* the multiqueue itself is 'p' task heaps */
 static taskheap_t *heaps;
 static int16_t heap_p;
 
+/* for atomic snapshot */
+static uint64_t snapshot_owner = -1;
+
 /* unbias state for the RNG */
 static uint64_t cong_unbias;
+
+/* state for sleep checking */
+static const int16_t not_sleeping = 0;
+static const int16_t checking_for_sleeping = 1;
+static const int16_t sleeping = 2;
+static int16_t sleep_check_state = not_sleeping;
 
 
 /*  multiq_init()
@@ -102,7 +116,7 @@ int multiq_insert(ptask_t *task, int16_t priority)
     } while (__atomic_test_and_set(&heaps[rn].lock, __ATOMIC_ACQUIRE));
 
     if (heaps[rn].ntasks >= MULTIQ_TASKS_PER_HEAP) {
-        LOG_ERR(plog, "  heap %ld is full\n", rn);
+        LOG_ERR(plog, "  heap %llu is full\n", rn);
         __atomic_clear(&heaps[rn].lock, __ATOMIC_RELEASE);
         return -1;
     }
@@ -127,7 +141,7 @@ ptask_t *multiq_deletemin()
     int16_t i, prio1, prio2;
     ptask_t *task;
 
-    for (i = 0;  i < nthreads;  ++i) {
+    for (i = 0;  i < heap_p;  ++i) {
         rn1 = cong(heap_p, cong_unbias, &rngseed);
         rn2 = cong(heap_p, cong_unbias, &rngseed);
         prio1 = __atomic_load_n(&heaps[rn1].prio, __ATOMIC_SEQ_CST);
@@ -144,7 +158,7 @@ ptask_t *multiq_deletemin()
             __atomic_clear(&heaps[rn1].lock, __ATOMIC_RELEASE);
         }
     }
-    if (i == nthreads)
+    if (i == heap_p)
         return NULL;
 
     task = heaps[rn1].tasks[0];
@@ -176,5 +190,91 @@ int16_t multiq_minprio()
     if (prio2 < prio1)
         return prio2;
     return prio1;
+}
+
+
+/*  just_sleep()
+ */
+static void just_sleep(pthread_mutex_t *lock, pthread_cond_t *wakeup)
+{
+    pthread_mutex_lock(lock);
+    if (__atomic_load_n(&sleep_check_state, __ATOMIC_SEQ_CST) == sleeping)
+        pthread_cond_wait(wakeup, lock);
+    else
+        pthread_mutex_unlock(lock);
+}
+
+
+/*  snapshot_and_sleep()
+ */
+static void snapshot_and_sleep(pthread_mutex_t *lock, pthread_cond_t *wakeup)
+{
+    uint64_t snapshot_id = cong(UINT64_MAX, 0, &rngseed), previous = -1;
+    if (!__atomic_compare_exchange_n(&snapshot_owner, &previous, snapshot_id, 0,
+                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+        LOG_ERR(plog, "  snapshot has previous owner!\n");
+        return;
+    }
+
+    int16_t i;
+    for (i = 0;  i < heap_p;  ++i) {
+        if (heaps[i].ntasks != 0)
+            break;
+    }
+    if (i != heap_p) {
+        LOG_INFO(plog, "  heap has tasks, snapshot aborted\n");
+        return;
+    }
+
+    if (!__atomic_compare_exchange_n(&snapshot_owner, &snapshot_id, previous, 0,
+                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+        LOG_INFO(plog, "  snapshot owner changed, snapshot aborted\n");
+        return;
+    }
+    if (!__atomic_compare_exchange_n(&sleep_check_state, (int16_t *)&checking_for_sleeping,
+                                     sleeping, 0,
+                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+        LOG_ERR(plog, "  sleep aborted at snapshot end\n");
+        return;
+    }
+    just_sleep(lock, wakeup);
+}
+
+
+/*  multiq_sleep_if_empty()
+ */
+void multiq_sleep_if_empty(pthread_mutex_t *lock, pthread_cond_t *wakeup)
+{
+    int16_t state;
+
+sleep_start:
+    state = __atomic_load_n(&sleep_check_state, __ATOMIC_SEQ_CST);
+    if (state == checking_for_sleeping) {
+        for (; ;) {
+            cpu_pause();
+            state = __atomic_load_n(&sleep_check_state, __ATOMIC_SEQ_CST);
+            if (state == not_sleeping)
+                break;
+            else if (state == sleeping) {
+                just_sleep(lock, wakeup);
+                break;
+            }
+        }
+    }
+    else if (state == not_sleeping) {
+        if (!__atomic_compare_exchange_n(&sleep_check_state, (int16_t *)&not_sleeping,
+                                         checking_for_sleeping, 0,
+                                         __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+            goto sleep_start;
+        snapshot_and_sleep(lock, wakeup);
+        if (!__atomic_compare_exchange_n(&sleep_check_state, (int16_t *)&sleeping,
+                                         not_sleeping, 0,
+                                         __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+            LOG_ERR(plog, "  sleep check state update failed\n");
+    }
+    else
+        just_sleep(lock, wakeup);
+
+    __atomic_store_n(&sleep_check_state, not_sleeping, __ATOMIC_SEQ_CST);
 }
 
