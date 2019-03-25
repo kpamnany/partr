@@ -146,6 +146,27 @@ static void show_affinity()
 #endif
 
 
+/*  wake_thread()
+ */
+static void wake_thread(int16_t wtid)
+{
+    if (wtid != tid) {
+        pthread_mutex_lock(all_sleep_locks[wtid]);
+        pthread_cond_signal(all_wake_signals[wtid]);
+        pthread_mutex_unlock(all_sleep_locks[wtid]);
+    }
+}
+
+
+/*  wake_all_threads()
+ */
+static void wake_all_threads()
+{
+    for (int16_t i = 0;  i < nthreads;  ++i)
+        wake_thread(i);
+}
+
+
 /*  partr_init() -- initialization entry point
  */
 void partr_init()
@@ -326,6 +347,7 @@ void partr_shutdown()
             break;
         }
     }
+    wake_all_threads();
 
     /* wait for all threads to shut down */
     sleep(1);
@@ -387,14 +409,15 @@ static void partr_coro(struct concurrent_ctx *ctx)
 
         /* the last task to finish needs to finish up the loop */
         if (was_last) {
-            LOG_DEBUG(plog, "  thread %d loop task %p (grain %d) was last\n",
-                      tid, task, task->grain_num);
+            LOG_DEBUG(plog, "  thread %d grain task %d (%p) was last\n",
+                      tid, task->grain_num, task);
 
             /* a non-parent task must wake up the parent */
             if (task->grain_num > 0) {
                 LOG_DEBUG(plog, "  thread %d waking loop parent task %p\n",
                           tid, task->parent);
                 multiq_insert(task->parent, 0);
+                wake_all_threads();
             }
             /* the parent task was last; it can just end */
         }
@@ -479,7 +502,7 @@ static void add_to_taskq(ptask_t *task)
 
     __atomic_clear(lock, __ATOMIC_RELEASE);
 
-    /* TODO: wake up the thread */
+    wake_thread(task->sticky_tid);
 }
 
 
@@ -506,45 +529,19 @@ static ptask_t *get_from_taskq()
 }
 
 
-/*  get_next_task() -- get the next available task
+/*  sleep_after_threshold() -- if sleep_threshold cycles have passed, sleep the thread
  */
-static ptask_t *get_next_task()
+static void sleep_after_threshold(uint64_t *start_cycles)
 {
-    ptask_t *task;
-    uint64_t spin_cycles, spin_start = 0;
-
-    for (; ;) {
-        /* first check for sticky tasks */
-        task = get_from_taskq();
-        if (task)
-            return task;
-
-        /* no sticky tasks, go to the multiq */
-        task = multiq_deletemin();
-        if (task) {
-            assert(!(task->settings & TASK_IS_STICKY));
-
-            /* terminate tasks tell the thread to die */
-            if (task->settings & TASK_TERMINATE) {
-                release_task(task);
-                LOG_INFO(plog, "  thread %d got terminate task\n", tid);
-                return NULL;
-            }
-
-            return task;
+    if (sleep_threshold) {
+        if (!(*start_cycles)) {
+            *start_cycles = rdtscp();
+            return;
         }
-
-        /* no tasks, should this thread try to sleep? */
-        if (sleep_threshold) {
-            if (!spin_start) {
-                spin_start = rdtscp();
-                continue;
-            }
-            spin_cycles = rdtscp() - spin_start;
-            if (spin_cycles >= sleep_threshold) {
-                multiq_sleep_if_empty(sleep_lock, wake_signal);
-                spin_start = 0;
-            }
+        uint64_t elapsed_cycles = rdtscp() - (*start_cycles);
+        if (elapsed_cycles >= sleep_threshold) {
+            multiq_sleep_if_empty(sleep_lock, wake_signal);
+            *start_cycles = 0;
         }
     }
 }
@@ -552,69 +549,86 @@ static ptask_t *get_next_task()
 
 /*  run_next() -- run the next available task
  */
-static void run_next()
+static int run_next()
 {
     ptask_t *task;
 
-    for (; ;) {
-        task = get_next_task();
-        if (task == NULL)
-            return;
+    /* first check for sticky tasks */
+    task = get_from_taskq();
+    if (task == NULL) {
+        /* no sticky tasks, go to the multiq */
+        task = multiq_deletemin();
+        if (task != NULL)
+            assert(!(task->settings & TASK_IS_STICKY));
+    }
+    if (task == NULL)
+        return 0;
 
-        LOG_DEBUG(plog, "  thread %d resuming task %p\n", tid, task);
-
-        /* run/resume the task */
-        curr_task = task;
-        int64_t y = (int64_t)resume(task->ctx);
-        curr_task = NULL;
-
-        /* if the task isn't done, it is either in a CQ, or must be re-queued */
-        if (!ctx_is_done(task->ctx)) {
-            /* the yield value tells us if the task is in a CQ */
-            if (y != yield_from_sync) {
-                LOG_DEBUG(plog, "  thread %d had task %p yield\n", tid, task);
-
-                /* sticky tasks go to the thread's sticky queue */
-                if (task->settings & TASK_IS_STICKY)
-                    add_to_taskq(task);
-                /* all others go back into the multiq */
-                else
-                    multiq_insert(task, task->prio);
-            }
-            continue;
-        }
-
-        LOG_DEBUG(plog, "  thread %d completed task %p\n", tid, task);
-
-        /* The task completed. As detached tasks cannot be synced, clean
-           those up here.
-         */
-        if (task->settings & TASK_IS_DETACHED) {
-            release_task(task);
-            continue;
-        }
-
-        /* add back all the tasks in this one's completion queue */
-        while (__atomic_test_and_set(&task->cq_lock, __ATOMIC_ACQUIRE))
-            cpu_pause();
-        ptask_t *cqtask, *cqnext;
-        cqtask = task->cq;
-        task->cq = NULL;
-        while (cqtask) {
-            cqnext = cqtask->next;
-            cqtask->next = NULL;
-            LOG_DEBUG(plog, "  thread %d adding from task %p's CQ: %p\n",
-                        tid, task, cqtask);
-            if (cqtask->settings & TASK_IS_STICKY)
-                add_to_taskq(cqtask);
-            else
-                multiq_insert(cqtask, cqtask->prio);
-            cqtask = cqnext;
-        }
-        __atomic_clear(&task->cq_lock, __ATOMIC_RELEASE);
+    /* terminate tasks tell the thread to die */
+    if (task->settings & TASK_TERMINATE) {
+        release_task(task);
+        LOG_INFO(plog, "  thread %d got terminate task\n", tid);
+        return -1;
     }
 
-    return;
+    LOG_DEBUG(plog, "  thread %d resuming task %p\n", tid, task);
+
+    /* run/resume the task */
+    curr_task = task;
+    int64_t y = (int64_t)resume(task->ctx);
+    curr_task = NULL;
+
+    /* if the task isn't done, it is either in a CQ, or must be re-queued */
+    if (!ctx_is_done(task->ctx)) {
+        /* the yield value tells us if the task is in a CQ */
+        if (y != yield_from_sync) {
+            LOG_DEBUG(plog, "  thread %d had task %p yield\n", tid, task);
+
+            /* sticky tasks go to the thread's sticky queue */
+            if (task->settings & TASK_IS_STICKY)
+                add_to_taskq(task);
+
+            /* all others go back into the multiq */
+            else {
+                multiq_insert(task, task->prio);
+                wake_all_threads();
+            }
+        }
+        return 1;
+    }
+
+    LOG_DEBUG(plog, "  thread %d completed task %p\n", tid, task);
+
+    /* The task completed. As detached tasks cannot be synced, clean
+       those up here.
+     */
+    if (task->settings & TASK_IS_DETACHED) {
+        release_task(task);
+        return 2;
+    }
+
+    /* add back all the tasks in this one's completion queue */
+    while (__atomic_test_and_set(&task->cq_lock, __ATOMIC_ACQUIRE))
+        cpu_pause();
+    ptask_t *cqtask, *cqnext;
+    cqtask = task->cq;
+    task->cq = NULL;
+    while (cqtask) {
+        cqnext = cqtask->next;
+        cqtask->next = NULL;
+        LOG_DEBUG(plog, "  thread %d adding from task %p's CQ: %p\n",
+                    tid, task, cqtask);
+        if (cqtask->settings & TASK_IS_STICKY)
+            add_to_taskq(cqtask);
+        else {
+            multiq_insert(cqtask, cqtask->prio);
+            wake_all_threads();
+        }
+        cqtask = cqnext;
+    }
+    __atomic_clear(&task->cq_lock, __ATOMIC_RELEASE);
+
+    return 2;
 }
 
 
@@ -648,8 +662,9 @@ int partr_start(void **ret, void *(*f)(void *, int64_t, int64_t),
             add_to_taskq(start_task);
         }
 
-        run_next();
-        assert(ctx_is_done(start_task->ctx));
+        while (run_next() != -1)
+            if (ctx_is_done(start_task->ctx))
+                break;
     }
 
     void *r = release_task(start_task);
@@ -705,7 +720,15 @@ static void *partr_thread(void *arg_)
     free(arg);
 
     /* run the scheduler */
-    run_next();
+    uint64_t start_cycles = 0;
+    int r = 1;
+    while (r != -1) {
+        r = run_next();
+        if (r == 0)
+            sleep_after_threshold(&start_cycles);
+        else if (r > 0)
+            start_cycles = 0;
+    }
 
     /* free the sleep lock and wakeup signal */
     free(wake_signal);
@@ -745,6 +768,7 @@ int partr_spawn(partr_t *t, void *(*f)(void *, int64_t, int64_t),
             release_task(task);
             return -2;
         }
+        wake_all_threads();
     }
 
     *t = detach ? NULL : (partr_t)task;
@@ -884,6 +908,7 @@ int partr_parfor(partr_t *t, void *(*f)(void *, int64_t, int64_t),
 
         start = end;
     }
+    wake_all_threads();
 
     LOG_DEBUG(plog, "  thread %d task %p parfor spawned %lld tasks\n",
             tid, curr_task, n);

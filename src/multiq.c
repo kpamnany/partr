@@ -209,7 +209,7 @@ static void just_sleep(pthread_mutex_t *lock, pthread_cond_t *wakeup)
  */
 static void snapshot_and_sleep(pthread_mutex_t *lock, pthread_cond_t *wakeup)
 {
-    uint64_t snapshot_id = cong(UINT64_MAX, 0, &rngseed), previous = -1;
+    uint64_t snapshot_id = cong(UINT64_MAX, UINT64_MAX, &rngseed), previous = -1;
     if (!__atomic_compare_exchange_n(&snapshot_owner, &previous, snapshot_id, 0,
                                      __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
         LOG_ERR(plog, "  snapshot has previous owner!\n");
