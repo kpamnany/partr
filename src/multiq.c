@@ -272,9 +272,7 @@ sleep_start:
                                          __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
             LOG_ERR(plog, "  sleep check state update failed\n");
     }
-    else
+    else /* state == sleeping */
         just_sleep(lock, wakeup);
-
-    __atomic_store_n(&sleep_check_state, not_sleeping, __ATOMIC_SEQ_CST);
 }
 

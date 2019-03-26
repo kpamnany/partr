@@ -42,7 +42,7 @@
 /* controls for when threads sleep */
 #define THREAD_SLEEP_THRESHOLD_NAME     "PARTR_THREAD_SLEEP_THRESHOLD"
     /* environment variable name */
-#define DEFAULT_THREAD_SLEEP_THRESHOLD  2e9
+#define DEFAULT_THREAD_SLEEP_THRESHOLD  4e9
     /* in cycles (1e9 == 1sec@1GHz) */
 
 /* defaults for # threads */

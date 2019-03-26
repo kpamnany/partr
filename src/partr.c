@@ -58,6 +58,9 @@ __thread pthread_cond_t *wake_signal;
 pthread_mutex_t **all_sleep_locks;
 pthread_cond_t **all_wake_signals;
 
+/* thread IDs */
+pthread_t *all_thread_ids;
+
 /* forward declare thread function */
 static void *partr_thread(void *arg_);
 
@@ -279,11 +282,9 @@ void partr_init()
     BARRIER_THREAD_DECL;
     BARRIER_INIT();
 
-    pthread_t pthread_id;
-    pthread_attr_t pthread_attr;
-
-    pthread_attr_init(&pthread_attr);
-    pthread_attr_setdetachstate(&pthread_attr, PTHREAD_CREATE_DETACHED);
+    /* allocate space for all thread IDs */
+    all_thread_ids = (pthread_t *)calloc(nthreads, sizeof(pthread_t));
+    all_thread_ids[0] = pthread_self();
 
     for (int16_t i = 1;  i < nthreads;  ++i) {
         lthread_arg_t *targ = (lthread_arg_t *)calloc(1, sizeof(lthread_arg_t));
@@ -297,9 +298,8 @@ void partr_init()
             targ->topology = topology;
             targ->cpuset = cpuset;
         }
-        pthread_create(&pthread_id, &pthread_attr, partr_thread, targ);
+        pthread_create(&all_thread_ids[i], NULL, partr_thread, targ);
     }
-    pthread_attr_destroy(&pthread_attr);
 
     /* allocate this thread's sticky task queue pointer and initialize the lock */
     posix_memalign((void **)&taskq_lock, 64, sizeof(int8_t) + sizeof(ptask_t *));
@@ -350,10 +350,14 @@ void partr_shutdown()
     wake_all_threads();
 
     /* wait for all threads to shut down */
-    sleep(1);
+    for (int64_t i = 1;  i < nthreads;  ++i)
+        pthread_join(all_thread_ids[i], NULL);
 
     /* show profiling information */
     PROFILE_PRINT();
+
+    /* free thread IDs array */
+    free(all_thread_ids);
 
     /* free sleep lock and wakeup signal */
     free(wake_signal);
@@ -450,6 +454,7 @@ static ptask_t *setup_task(void *(*f)(void *, int64_t, int64_t), void *arg,
     task->arg = arg;
     task->start = start;
     task->end = end;
+    task->settings = 0;
     task->sticky_tid = -1;
     task->grain_num = -1;
 
