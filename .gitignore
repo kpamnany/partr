@@ -25,7 +25,9 @@
 
 # Executables
 l3d
+l3d_partr
 fib
+sleeptest
 parfortest
 multiqtest
 taskpoolstest

@@ -165,6 +165,15 @@ static void wake_thread(int16_t wtid)
  */
 static void wake_all_threads()
 {
+    // if a thread is trying to sleep, try to force an abort; this will carry any other
+    // threads along
+    if (__atomic_load_n(&sleep_check_state, __ATOMIC_SEQ_CST) == checking_for_sleeping)
+        if (__atomic_compare_exchange_n(&sleep_check_state, (int16_t *)&checking_for_sleeping,
+                                        (int16_t *)&not_sleeping, 0,
+                                        __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+            return;
+
+    // if a thread is already sleeping... TODO
     for (int16_t i = 0;  i < nthreads;  ++i)
         wake_thread(i);
 }

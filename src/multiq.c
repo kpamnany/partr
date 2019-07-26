@@ -36,7 +36,7 @@ static uint64_t cong_unbias;
 static const int16_t not_sleeping = 0;
 static const int16_t checking_for_sleeping = 1;
 static const int16_t sleeping = 2;
-static int16_t sleep_check_state = not_sleeping;
+int16_t volatile sleep_check_state = not_sleeping;
 
 
 /*  multiq_init()
